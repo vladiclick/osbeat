@@ -2,20 +2,11 @@
 use crate::{
     animation::{Engine, Style},
     app::App,
-    config::GlyphMode,
     logo::Logo,
 };
 use ratatui::{Frame, Terminal, backend::Backend, buffer::Buffer, layout::Rect, style::Color};
 
-#[derive(Clone, Copy)]
-struct Pixel {
-    x: u16,
-    y: u16,
-    source_x: usize,
-    source_y: usize,
-    character: char,
-    color: Color,
-}
+use super::raster::{Pixel, raster};
 
 #[derive(Default)]
 pub struct Scene {
@@ -46,7 +37,7 @@ impl Scene {
         &mut self,
         backend: &mut B,
         app: &App,
-        logo: &Logo,
+        _logo: &Logo,
         engine: &Engine,
     ) -> Result<(), B::Error> {
         let Some(display) = &mut self.display else {
@@ -55,23 +46,10 @@ impl Scene {
         let style = effect(&app.config.effect);
         self.updates.clear();
         for (index, pixel) in self.pixels.iter().enumerate() {
-            let color = engine.color(
-                pixel.source_x,
-                pixel.source_y,
-                logo.width,
-                logo.rows.len(),
-                pixel.color,
-                style,
-                app.config.intensity,
-            );
-            let color = if app.config.intensity > 0.0 {
-                quantize(color)
-            } else {
-                color
-            };
+            let (fg, bg) = colors(pixel, engine, style, app.config.intensity);
             let cell = &mut display[(pixel.x, pixel.y)];
-            if cell.fg != color {
-                cell.set_fg(color);
+            if cell.fg != fg || cell.bg != bg {
+                cell.set_fg(fg).set_bg(bg);
                 self.updates.push(index);
             }
         }
@@ -97,6 +75,9 @@ impl Scene {
             let region = super::base(frame, app, logo);
             self.pixels =
                 region.map_or_else(Vec::new, |area| raster(logo, area, app.config.glyphs));
+            for pixel in &mut self.pixels {
+                pixel.background = frame.buffer_mut()[(pixel.x, pixel.y)].bg;
+            }
             if app.diagnostics && frame.area().height >= 14 {
                 let top = frame.area().bottom().saturating_sub(5);
                 self.pixels
@@ -110,25 +91,11 @@ impl Scene {
         }
         let style = effect(&app.config.effect);
         for pixel in &self.pixels {
-            let color = engine.color(
-                pixel.source_x,
-                pixel.source_y,
-                logo.width,
-                logo.rows.len(),
-                pixel.color,
-                style,
-                app.config.intensity,
-            );
-            // A 4-bit glow palette avoids tiny RGB changes that trigger full ANSI
-            // color commands. Wave fronts still advance at the configured frame rate.
-            let color = if app.config.intensity > 0.0 {
-                quantize(color)
-            } else {
-                color
-            };
+            let (fg, bg) = colors(pixel, engine, style, app.config.intensity);
             frame.buffer_mut()[(pixel.x, pixel.y)]
                 .set_char(pixel.character)
-                .set_fg(color);
+                .set_fg(fg)
+                .set_bg(bg);
         }
         if app.diagnostics && frame.area().height >= 14 {
             let area = frame.area();
@@ -147,6 +114,46 @@ impl Scene {
     }
 }
 
+fn colors(pixel: &Pixel, engine: &Engine, style: Style, intensity: f32) -> (Color, Color) {
+    let color = engine.color(
+        pixel.source_x,
+        pixel.source_y,
+        pixel.field_width,
+        pixel.field_height,
+        pixel.color,
+        style,
+        intensity,
+    );
+    // Quantization avoids terminal writes for tiny, invisible RGB differences.
+    let color = if intensity > 0.0 {
+        quantize(color)
+    } else {
+        color
+    };
+    match pixel.coverage {
+        Some([255, 255]) | None => (color, pixel.background),
+        // For ▀, the foreground paints the top half and the background the bottom.
+        Some([upper, lower]) => (
+            blend(color, pixel.background, upper),
+            blend(color, pixel.background, lower),
+        ),
+    }
+}
+
+fn blend(foreground: Color, background: Color, alpha: u8) -> Color {
+    let Color::Rgb(r, g, b) = foreground else {
+        return foreground;
+    };
+    let Color::Rgb(br, bg, bb) = background else {
+        return foreground;
+    };
+    let channel = |fg: u8, bg: u8| {
+        ((u32::from(fg) * u32::from(alpha) + u32::from(bg) * (255 - u32::from(alpha)) + 127) / 255)
+            as u8
+    };
+    Color::Rgb(channel(r, br), channel(g, bg), channel(b, bb))
+}
+
 fn quantize(color: Color) -> Color {
     let channel = |value: u8| (((u16::from(value) + 8) / 16) * 16).min(255) as u8;
     match color {
@@ -162,52 +169,4 @@ pub(super) fn effect(name: &str) -> Style {
         "original" => Style::Original,
         _ => Style::Aurora,
     }
-}
-
-fn raster(logo: &Logo, area: Rect, mode: GlyphMode) -> Vec<Pixel> {
-    if area.is_empty() {
-        return Vec::new();
-    }
-    let factor = (area.width as f32 / logo.width.max(1) as f32)
-        .min(area.height as f32 / logo.rows.len().max(1) as f32);
-    // Bound painted cells so a large terminal doesn't multiply animation cost.
-    let visible = logo
-        .rows
-        .iter()
-        .flatten()
-        .filter(|glyph| glyph.character != ' ')
-        .count()
-        .max(1);
-    let factor = factor.min((700.0 / visible as f32).sqrt());
-    let width = (logo.width as f32 * factor).floor().max(1.0) as u16;
-    let height = (logo.rows.len() as f32 * factor).floor().max(1.0) as u16;
-    let left = area.x + area.width.saturating_sub(width) / 2;
-    let top = area.y + area.height.saturating_sub(height) / 2;
-    let mut pixels = Vec::with_capacity(width as usize * height as usize);
-    for y in 0..height.min(area.height) {
-        let source_y = (y as usize * logo.rows.len() / height as usize).min(logo.rows.len() - 1);
-        for x in 0..width.min(area.width) {
-            let source_x = (x as usize * logo.width / width as usize).min(logo.width - 1);
-            let Some(glyph) = logo.rows[source_y]
-                .get(source_x)
-                .filter(|glyph| glyph.character != ' ')
-            else {
-                continue;
-            };
-            let character = match mode {
-                GlyphMode::Solid => '█',
-                GlyphMode::Ascii => glyph.character,
-                GlyphMode::Dots => '⣿',
-            };
-            pixels.push(Pixel {
-                x: left + x,
-                y: top + y,
-                source_x,
-                source_y,
-                character,
-                color: glyph.color,
-            });
-        }
-    }
-    pixels
 }

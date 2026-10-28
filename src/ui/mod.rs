@@ -2,6 +2,7 @@ mod details;
 mod focus;
 pub mod live;
 mod panels;
+mod raster;
 mod settings;
 mod widgets;
 

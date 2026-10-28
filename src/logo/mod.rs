@@ -5,6 +5,9 @@ use serde::Deserialize;
 
 use crate::model::Os;
 
+mod mask;
+pub use mask::Mask;
+
 #[derive(Clone, Debug)]
 pub struct Glyph {
     pub character: char,
@@ -16,6 +19,7 @@ pub struct Logo {
     pub name: String,
     pub rows: Vec<Vec<Glyph>>,
     pub width: usize,
+    pub mask: Option<Mask>,
 }
 
 #[derive(Deserialize)]
@@ -24,6 +28,7 @@ struct Asset {
     name: String,
     colors: Vec<String>,
     art: String,
+    mask: Option<String>,
 }
 
 impl Logo {
@@ -74,6 +79,7 @@ impl Logo {
             name: crate::model::clean(&asset.name),
             rows,
             width,
+            mask: asset.mask.as_deref().map(Mask::parse).transpose()?,
         })
     }
 }
