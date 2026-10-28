@@ -110,10 +110,9 @@ python3 -m unittest tests/test_install.py   # installer and packaging
 python3 scripts/terminal_check.py --measure 35
 ```
 
-Releases: build each target with `cargo build --release --target <target>`, then
-`sh scripts/package_release.sh --target <target> --version vX.Y.Z` for
-`aarch64-apple-darwin` and `x86_64-apple-darwin`, and upload the archives with a
-combined `SHA256SUMS`.
+Releases: `sh scripts/build_release.sh` builds the Apple Silicon and Intel
+archives and `SHA256SUMS` into `dist/`; upload those to a GitHub release named
+after the version in `Cargo.toml`.
 
 ```text
 src/
