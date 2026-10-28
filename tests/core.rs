@@ -15,6 +15,7 @@ fn sample() -> Snapshot {
         uptime: 90061,
         own_cpu: Some(0.4),
         own_memory: 8 << 20,
+        telemetry: Default::default(),
     }
 }
 

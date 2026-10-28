@@ -445,6 +445,7 @@ dependencies = [
  "crossterm",
  "futures-util",
  "ratatui",
+ "rustix",
  "serde",
  "sysinfo",
  "tokio",

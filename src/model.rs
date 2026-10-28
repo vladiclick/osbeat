@@ -59,6 +59,7 @@ pub fn clean(text: &str) -> String {
 
 #[derive(Clone, Debug, Default)]
 pub struct Snapshot {
+    pub telemetry: crate::telemetry::Telemetry,
     pub cpu: Option<f32>,
     pub used_memory: u64,
     pub total_memory: u64,
@@ -87,6 +88,8 @@ pub const HISTORY_LEN: usize = 60;
 pub struct History {
     pub cpu: Vec<u64>,
     pub ram: Vec<u64>,
+    pub down: Vec<u64>,
+    pub up: Vec<u64>,
 }
 
 impl History {
@@ -96,6 +99,14 @@ impl History {
                 .cpu
                 .map_or_else(|| self.cpu.clone(), |cpu| append(&self.cpu, cpu as u64)),
             ram: append(&self.ram, snapshot.memory_percent() as u64),
+            down: snapshot
+                .telemetry
+                .network_down
+                .map_or_else(|| self.down.clone(), |value| append(&self.down, value)),
+            up: snapshot
+                .telemetry
+                .network_up
+                .map_or_else(|| self.up.clone(), |value| append(&self.up, value)),
         }
     }
 }
@@ -112,6 +123,25 @@ fn append(values: &[u64], value: u64) -> Vec<u64> {
 #[cfg(test)]
 mod tests {
     use super::{History, Snapshot};
+
+    #[test]
+    fn network_history_skips_warmup_and_keeps_bounded_samples() {
+        let empty = History::default().with_sample(&Snapshot::default());
+        assert!(empty.down.is_empty() && empty.up.is_empty());
+        let measured = Snapshot {
+            telemetry: crate::telemetry::Telemetry {
+                network_down: Some(1234),
+                network_up: Some(42),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let full = (0..80).fold(empty.clone(), |history, _| history.with_sample(&measured));
+        assert_eq!(full.down, vec![1234; 60]);
+        assert_eq!(full.up, vec![42; 60]);
+        assert!(empty.down.is_empty());
+        assert_eq!(full.with_sample(&Snapshot::default()).down, full.down);
+    }
 
     #[test]
     fn percentages_are_safe_at_boundaries() {
