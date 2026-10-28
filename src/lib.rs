@@ -1,6 +1,8 @@
+pub mod animation;
 pub mod app;
 pub mod cli;
 pub mod collectors;
+pub mod config;
 pub mod logo;
 pub mod model;
 pub mod telemetry;

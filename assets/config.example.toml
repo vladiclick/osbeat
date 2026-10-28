@@ -1,0 +1,22 @@
+# osbeat — your system, with a heartbeat.
+# Copy to ~/.config/osbeat/config.toml, or run osbeat --init-config.
+# Theme names: default, catppuccin, tokyonight, gruvbox, phosphor.
+theme = "default"
+# Effects: aurora, liquid, spectrum, original.
+effect = "aurora"
+glyphs = "solid" # solid, ascii, or dots
+# 10–60 frames per second. Higher settings increase the monitor's own CPU use.
+fps = 30
+speed = 1.0 # 0.25–3.0
+intensity = 0.85 # 0.0–1.0
+reduced_motion = false
+layout = "focus" # focus or dashboard
+# Optional custom logo in fastfetch-compatible osbeat TOML format:
+# logo = "/absolute/path/logo.toml"
+
+[panels]
+cpu = true
+memory = true
+network = true
+storage = true
+power = true
