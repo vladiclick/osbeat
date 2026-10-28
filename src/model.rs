@@ -3,7 +3,6 @@ use sysinfo::System;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Os {
     Mac,
-    Linux,
     Other,
 }
 
@@ -11,7 +10,6 @@ impl Os {
     pub fn from_id(id: &str) -> Self {
         match id {
             "macos" => Self::Mac,
-            "linux" => Self::Linux,
             _ => Self::Other,
         }
     }

@@ -76,7 +76,7 @@ fn bad_logo_data_is_rejected() {
 
 #[test]
 fn bundled_logos_load_without_external_files() {
-    for os in [Os::Mac, Os::Linux, Os::Other] {
+    for os in [Os::Mac, Os::Other] {
         let logo = Logo::for_os(os).unwrap();
         assert!(logo.width > 0 && !logo.rows.is_empty());
         assert!(!logo.rows.iter().flatten().any(|g| g.character == '$'));
@@ -194,7 +194,6 @@ fn formatters_cover_units_and_long_uptime() {
 #[test]
 fn operating_system_detection_is_explicit() {
     assert_eq!(Os::from_id("macos"), Os::Mac);
-    assert_eq!(Os::from_id("linux"), Os::Linux);
     assert_eq!(Os::from_id("freebsd"), Os::Other);
     assert!(!HostInfo::detect().hostname.is_empty());
 }

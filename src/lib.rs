@@ -1,3 +1,6 @@
+#[cfg(not(target_os = "macos"))]
+compile_error!("osbeat runs on macOS only");
+
 pub mod animation;
 pub mod app;
 pub mod cli;

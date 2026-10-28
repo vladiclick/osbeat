@@ -158,7 +158,6 @@ impl Drop for PeripheralWorker {
     }
 }
 
-#[cfg(unix)]
 fn read_root_disk() -> Option<DiskUsage> {
     // Query exactly this path. Enumerating mounts can touch unavailable SMB/NFS
     // volumes even when their capacity refresh is disabled.
@@ -178,11 +177,6 @@ fn read_root_disk() -> Option<DiskUsage> {
         total,
         label: "/".into(),
     })
-}
-
-#[cfg(not(unix))]
-fn read_root_disk() -> Option<DiskUsage> {
-    None
 }
 
 fn rank_interfaces(current: &Counters, previous: Option<&Counters>) -> Vec<String> {
@@ -233,7 +227,6 @@ fn rates(current: &Counters, previous: Option<&Counters>, elapsed: Duration) -> 
     ))
 }
 
-#[cfg(target_os = "macos")]
 fn read_battery() -> Option<BatteryStatus> {
     use std::{
         process::{Command, Stdio},
@@ -267,12 +260,6 @@ fn read_battery() -> Option<BatteryStatus> {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
-fn read_battery() -> Option<BatteryStatus> {
-    None
-}
-
-#[cfg(any(target_os = "macos", test))]
 fn parse_battery(text: &str) -> Option<BatteryStatus> {
     let on_ac = if text.contains("'AC Power'") {
         true
