@@ -3,6 +3,7 @@ use osbeat::{
     app::{Action, App},
     logo::Logo,
     model::{HostInfo, Os, Snapshot},
+    telemetry::{BatteryStatus, DiskUsage, Telemetry},
     ui,
 };
 use ratatui::{Terminal, backend::TestBackend};
@@ -15,7 +16,25 @@ fn sample() -> Snapshot {
         uptime: 90061,
         own_cpu: Some(0.4),
         own_memory: 8 << 20,
-        telemetry: Default::default(),
+        telemetry: Telemetry {
+            per_core: vec![12.0, 25.0, 37.0, 50.0, 62.0, 75.0, 87.0, 20.0],
+            swap_used: 1 << 30,
+            swap_total: 4 << 30,
+            network_down: Some(1 << 20),
+            network_up: Some(32 << 10),
+            network_interfaces: vec!["en0".into()],
+            root_disk: Some(DiskUsage {
+                used: 120 << 30,
+                total: 256 << 30,
+                label: "Macintosh HD".into(),
+            }),
+            battery: Some(BatteryStatus {
+                percent: 82.0,
+                charging: false,
+                on_ac: false,
+            }),
+            load_average: [0.8, 1.2, 1.5],
+        },
     }
 }
 
@@ -93,6 +112,10 @@ fn keys_have_predictable_actions() {
 }
 
 fn render(width: u16, height: u16, diagnostics: bool) -> String {
+    render_snapshot(width, height, diagnostics, sample())
+}
+
+fn render_snapshot(width: u16, height: u16, diagnostics: bool, snapshot: Snapshot) -> String {
     let host = HostInfo {
         os: Os::Mac,
         os_name: "macOS 26".into(),
@@ -103,7 +126,7 @@ fn render(width: u16, height: u16, diagnostics: bool) -> String {
         arch: "aarch64".into(),
     };
     let app = App::new(host)
-        .with_snapshot(sample())
+        .with_snapshot(snapshot)
         .with_diagnostics(diagnostics);
     let logo = Logo::for_os(Os::Mac).unwrap();
     let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
@@ -195,4 +218,102 @@ fn command_line_options_are_strict() {
     }
     assert!(parse(&["--wat"]).is_err());
     assert!(parse(&["--help", "--debug"]).is_err());
+}
+
+#[test]
+fn richer_dashboard_shows_live_resources_at_laptop_sizes() {
+    for (w, h) in [(100, 30), (120, 36)] {
+        let text = render(w, h, false);
+        for label in [
+            "CPU",
+            "MEMORY",
+            "SWAP",
+            "NETWORK",
+            "STORAGE",
+            "POWER",
+            "C01",
+            "en0",
+            "1.0 MiB/s",
+            "32.0 KiB/s",
+            "82%",
+            "120.0",
+            "256.0",
+        ] {
+            assert!(text.contains(label), "missing {label} at {w}x{h}");
+        }
+    }
+}
+
+#[test]
+fn throughput_formatting_preserves_warmup_and_units() {
+    assert_eq!(ui::rate(None), "sampling");
+    assert_eq!(ui::rate(Some(0)), "0 B/s");
+    assert_eq!(ui::rate(Some(1023)), "1023 B/s");
+    assert_eq!(ui::rate(Some(1024)), "1.0 KiB/s");
+    assert_eq!(ui::rate(Some(1 << 20)), "1.0 MiB/s");
+    assert_eq!(ui::rate(Some(1 << 30)), "1.0 GiB/s");
+}
+
+#[test]
+fn unavailable_resources_are_explicit_and_never_invented() {
+    let text = render_snapshot(120, 36, false, Snapshot::default());
+    assert_eq!(text.matches("Not available").count(), 2);
+    assert!(text.contains("No active interface"));
+    assert!(text.contains("sampling"));
+    assert!(!text.contains("Discharging"));
+}
+
+#[test]
+fn layout_thresholds_and_large_core_counts_remain_bounded() {
+    let snapshot = Snapshot {
+        telemetry: Telemetry {
+            per_core: vec![100.0; 128],
+            ..Telemetry::default()
+        },
+        ..sample()
+    };
+    for width in [29, 30, 51, 52, 73, 74, 75, 76, 77, 99, 100, 101, 120] {
+        for height in [7, 8, 18, 19, 23, 24, 27, 28, 30, 36] {
+            let text = render_snapshot(width, height, false, snapshot.clone());
+            if width >= 30 && height >= 8 {
+                assert!(text.contains("CPU"));
+            }
+        }
+    }
+}
+
+#[test]
+fn charging_and_external_power_have_distinct_labels() {
+    for (charging, on_ac, expected) in [
+        (true, true, "Charging"),
+        (false, true, "Plugged in"),
+        (false, false, "Discharging"),
+    ] {
+        let snapshot = Snapshot {
+            telemetry: Telemetry {
+                battery: Some(BatteryStatus {
+                    percent: 50.0,
+                    charging,
+                    on_ac,
+                }),
+                ..Telemetry::default()
+            },
+            ..sample()
+        };
+        assert!(render_snapshot(120, 36, false, snapshot).contains(expected));
+    }
+}
+
+#[test]
+fn unfamiliar_logo_dimensions_do_not_break_responsive_layout() {
+    let app = App::new(HostInfo::detect()).with_snapshot(sample());
+    let logo = Logo::parse(&format!(
+        "name='wide'\ncolors=['#ffffff']\nart='{}'",
+        "X".repeat(80)
+    ))
+    .unwrap();
+    for (width, height) in [(80, 24), (120, 36), (240, 60)] {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal.draw(|frame| ui::draw(frame, &app, &logo)).unwrap();
+    }
 }

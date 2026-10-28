@@ -1,190 +1,216 @@
+use super::widgets::{panel, spark, text};
+use super::{CPU, CYAN, FG, MUTED, PINK, RAM, gib, rate, uptime};
+use crate::app::App;
 use ratatui::{
     Frame,
-    layout::{Alignment, Constraint, Layout, Rect},
-    style::{Color, Modifier, Style},
+    layout::{Constraint, Layout, Rect},
+    style::Style,
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, LineGauge, Paragraph, Sparkline},
+    widgets::Paragraph,
 };
 
-use super::{BG, CPU, FG, LINE, MUTED, RAM, gib, uptime};
-use crate::app::App;
+pub(super) fn at(area: Rect, offset: u16, height: u16) -> Rect {
+    Rect::new(
+        area.x,
+        area.y.saturating_add(offset).min(area.bottom()),
+        area.width,
+        height.min(area.height.saturating_sub(offset)),
+    )
+}
 
 pub(super) fn stats(frame: &mut Frame, app: &App, area: Rect) {
-    if area.height < 12 {
+    if area.width < 52 || area.height < 19 {
         compact(frame, app, area);
         return;
     }
+    let top = (area.height / 3).clamp(8, 10);
     let rows = Layout::vertical([
+        Constraint::Length(top),
+        Constraint::Min(5),
         Constraint::Length(6),
-        Constraint::Length(6),
-        Constraint::Min(0),
     ])
     .split(area);
-    let cpu_value = app
+    let columns =
+        Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).split(rows[0]);
+    cpu(frame, app, columns[0]);
+    memory(frame, app, columns[1]);
+    super::details::network(frame, app, rows[1]);
+    super::details::peripherals(frame, app, rows[2]);
+}
+
+fn cpu(frame: &mut Frame, app: &App, area: Rect) {
+    let inner = panel(frame, area, "CPU", CPU);
+    let value = app
         .snapshot
         .cpu
-        .map_or_else(|| "warming up".into(), |value| format!("{value:.1}%"));
-    metric(
+        .map_or_else(|| "sampling".into(), |value| format!("{value:.1}%"));
+    text(
         frame,
-        rows[0],
-        "CPU",
-        &cpu_value,
-        &app.history.cpu,
-        app.snapshot.cpu.unwrap_or(0.0),
-        CPU,
+        at(inner, 0, 1),
+        format!("{value}  ·  {} CORES", app.host.cores),
+        FG,
     );
-    let memory_value = format!(
-        "{} / {} GiB",
-        gib(app.snapshot.used_memory),
-        gib(app.snapshot.total_memory)
-    );
-    metric(
+    spark(frame, at(inner, 1, 2), &app.history.cpu, 100, CPU);
+    let load = app.snapshot.telemetry.load_average;
+    text(
         frame,
-        rows[1],
-        "MEMORY",
-        &memory_value,
-        &app.history.ram,
-        app.snapshot.memory_percent(),
-        RAM,
+        at(inner, 3, 1),
+        format!("LOAD {:.1}  {:.1}  {:.1}", load[0], load[1], load[2]),
+        MUTED,
     );
-    system(frame, app, rows[2]);
+    cores(
+        frame,
+        at(inner, 4, inner.height.saturating_sub(4)),
+        &app.snapshot.telemetry.per_core,
+    );
 }
 
-fn metric(
-    frame: &mut Frame,
-    area: Rect,
-    title: &str,
-    value: &str,
-    history: &[u64],
-    percent: f32,
-    color: Color,
-) {
-    let rows = Layout::vertical([
-        Constraint::Length(1),
-        Constraint::Length(1),
-        Constraint::Length(2),
-        Constraint::Length(1),
-        Constraint::Length(1),
-    ])
-    .split(area);
-    let cols = Layout::horizontal([Constraint::Length(8), Constraint::Min(0)]).split(rows[0]);
-    frame.render_widget(
-        Paragraph::new(title).style(Style::default().fg(MUTED)),
-        cols[0],
-    );
-    frame.render_widget(
-        Paragraph::new(value)
-            .alignment(Alignment::Right)
-            .style(Style::default().fg(color).add_modifier(Modifier::BOLD)),
-        cols[1],
-    );
-    // Pad on the left so the newest point always sits at the right edge.
-    let width = rows[2].width as usize;
-    let data: Vec<u64> = std::iter::repeat_n(0, width.saturating_sub(history.len()))
-        .chain(
-            history
+fn cores(frame: &mut Frame, area: Rect, cores: &[f32]) {
+    if cores.is_empty() {
+        text(frame, area, "Core counters warming up", MUTED);
+        return;
+    }
+    let columns = (area.width / 5).max(1) as usize;
+    let capacity = columns * area.height as usize;
+    let lines: Vec<Line> = cores
+        .chunks(columns)
+        .take(area.height as usize)
+        .enumerate()
+        .map(|(row, values)| {
+            let spans: Vec<Span> = values
                 .iter()
-                .skip(history.len().saturating_sub(width))
-                .copied(),
-        )
-        .collect();
-    frame.render_widget(
-        Sparkline::default()
-            .data(&data)
-            .max(100)
-            .style(Style::default().fg(color)),
-        rows[2],
-    );
-    frame.render_widget(
-        LineGauge::default()
-            .ratio(f64::from(percent.clamp(0.0, 100.0)) / 100.0)
-            .label("")
-            .filled_symbol("━")
-            .unfilled_symbol("━")
-            .filled_style(Style::default().fg(color))
-            .unfilled_style(Style::default().fg(LINE)),
-        rows[4],
-    );
-}
-
-fn system(frame: &mut Frame, app: &App, area: Rect) {
-    let cpu = format!("{} · {} cores", app.host.cpu_name, app.host.cores);
-    let entries = [
-        ("UPTIME", uptime(app.snapshot.uptime)),
-        ("SYSTEM", app.host.os_name.clone()),
-        ("CHIP", cpu),
-        ("KERNEL", app.host.kernel.clone()),
-        ("ARCH", app.host.arch.clone()),
-    ];
-    let lines: Vec<Line> = entries
-        .iter()
-        .map(|(label, value)| {
-            Line::from(vec![
-                Span::styled(format!("{label:<8}"), Style::default().fg(MUTED)),
-                Span::styled(value.as_str(), Style::default().fg(FG)),
-            ])
+                .enumerate()
+                .map(|(index, value)| {
+                    let position = (value.clamp(0.0, 100.0) / 100.0 * 7.0).round() as usize;
+                    let bar = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'][position.min(7)];
+                    let id = row * columns + index + 1;
+                    Span::styled(
+                        format!("C{id:02}{bar} "),
+                        Style::default().fg(if *value >= 80.0 { super::AMBER } else { CPU }),
+                    )
+                })
+                .collect();
+            Line::from(spans)
         })
         .collect();
     frame.render_widget(Paragraph::new(lines), area);
+    if cores.len() > capacity && area.height > 0 && area.width >= 5 {
+        text(
+            frame,
+            Rect::new(area.right() - 5, area.bottom() - 1, 5, 1),
+            format!(
+                "+{:02}  ",
+                cores.len().saturating_sub(capacity).saturating_add(1)
+            ),
+            MUTED,
+        );
+    }
+}
+
+fn memory(frame: &mut Frame, app: &App, area: Rect) {
+    let inner = panel(frame, area, "MEMORY", RAM);
+    let s = &app.snapshot;
+    text(
+        frame,
+        at(inner, 0, 1),
+        format!("{} / {} GiB", gib(s.used_memory), gib(s.total_memory)),
+        FG,
+    );
+    spark(frame, at(inner, 1, 2), &app.history.ram, 100, RAM);
+    text(
+        frame,
+        at(inner, 3, 1),
+        format!(
+            "{:.1}% used · {} GiB free",
+            s.memory_percent(),
+            gib(s.total_memory.saturating_sub(s.used_memory))
+        ),
+        MUTED,
+    );
+    text(
+        frame,
+        at(inner, 4, 1),
+        format!(
+            "SWAP {} / {} GiB",
+            gib(s.telemetry.swap_used),
+            gib(s.telemetry.swap_total)
+        ),
+        PINK,
+    );
+    super::widgets::gauge(frame, at(inner, 5, 1), s.used_memory, s.total_memory, RAM);
 }
 
 fn compact(frame: &mut Frame, app: &App, area: Rect) {
-    let cpu = app
-        .snapshot
+    let s = &app.snapshot;
+    if area.height < 12 {
+        let lines = vec![
+            Line::from(format!(
+                "CPU     {}",
+                s.cpu
+                    .map_or_else(|| "sampling".into(), |cpu| format!("{cpu:.1}%"))
+            )),
+            Line::from(format!(
+                "MEMORY  {} / {} GiB",
+                gib(s.used_memory),
+                gib(s.total_memory)
+            )),
+            Line::from(format!(
+                "NET ↓{} ↑{}",
+                rate(s.telemetry.network_down),
+                rate(s.telemetry.network_up)
+            )),
+            Line::from(format!("SWAP    {} GiB", gib(s.telemetry.swap_used))),
+            Line::from(format!("UPTIME  {}", uptime(s.uptime))),
+            Line::from(app.host.os_name.as_str()),
+        ];
+        frame.render_widget(Paragraph::new(lines).style(Style::default().fg(FG)), area);
+        return;
+    }
+    let cpu = s
         .cpu
-        .map_or_else(|| "warming up".into(), |cpu| format!("{cpu:.1}%"));
-    let lines = vec![
-        Line::from(vec![
-            Span::styled("CPU     ", Style::default().fg(CPU)),
-            Span::raw(cpu),
-        ]),
-        Line::from(vec![
-            Span::styled("MEMORY  ", Style::default().fg(RAM)),
-            Span::raw(format!(
-                "{} / {} GiB",
-                gib(app.snapshot.used_memory),
-                gib(app.snapshot.total_memory)
-            )),
-        ]),
-        Line::from(format!("UPTIME  {}", uptime(app.snapshot.uptime))),
-        Line::from(app.host.os_name.as_str()),
-        Line::from(app.host.cpu_name.as_str()),
-    ];
-    frame.render_widget(Paragraph::new(lines), area);
-}
-
-pub(super) fn diagnostics(frame: &mut Frame, app: &App, area: Rect) {
-    let cpu = app
-        .snapshot
-        .own_cpu
-        .map_or_else(|| "warming up".into(), |cpu| format!("{cpu:.2}%"));
-    let color = if app.snapshot.own_cpu.is_some_and(|cpu| cpu >= 2.0) {
-        Color::Rgb(239, 159, 118)
-    } else {
-        RAM
-    };
-    frame.render_widget(Clear, area);
-    let block = Block::default()
-        .borders(Borders::TOP)
-        .border_style(Style::default().fg(LINE))
-        .style(Style::default().bg(BG));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-    frame.render_widget(
-        Paragraph::new(vec![
-            Line::from(vec![
-                Span::styled(format!("SELF CPU {cpu}"), Style::default().fg(color)),
-                Span::raw(format!(
-                    "    RSS {:.1} MiB",
-                    app.snapshot.own_memory as f64 / (1_u64 << 20) as f64
-                )),
-            ]),
-            Line::from(Span::styled(
-                "Budget <2% of one core · d to close",
-                Style::default().fg(MUTED),
-            )),
-        ])
-        .style(Style::default().fg(FG)),
-        inner,
+        .map_or_else(|| "sampling".into(), |cpu| format!("{cpu:.1}%"));
+    text(
+        frame,
+        at(area, 0, 1),
+        format!("CPU  {cpu} · {} CORES", app.host.cores),
+        CPU,
     );
+    spark(frame, at(area, 1, 2), &app.history.cpu, 100, CPU);
+    cores(frame, at(area, 3, 1), &s.telemetry.per_core);
+    text(
+        frame,
+        at(area, 4, 1),
+        format!(
+            "MEMORY {} / {} GiB",
+            gib(s.used_memory),
+            gib(s.total_memory)
+        ),
+        RAM,
+    );
+    spark(frame, at(area, 5, 2), &app.history.ram, 100, RAM);
+    text(
+        frame,
+        at(area, 7, 1),
+        format!(
+            "SWAP {} / {} GiB",
+            gib(s.telemetry.swap_used),
+            gib(s.telemetry.swap_total)
+        ),
+        PINK,
+    );
+    text(
+        frame,
+        at(area, 8, 1),
+        format!("NETWORK ↓{}", rate(s.telemetry.network_down)),
+        CYAN,
+    );
+    let maximum = app.history.down.iter().max().copied().unwrap_or(1).max(1);
+    spark(frame, at(area, 9, 2), &app.history.down, maximum, CYAN);
+    text(
+        frame,
+        at(area, 11, 1),
+        format!("UPLOAD  ↑{}", rate(s.telemetry.network_up)),
+        PINK,
+    );
+    super::details::compact_peripherals(frame, app, at(area, 12, area.height.saturating_sub(12)));
 }

@@ -92,7 +92,8 @@ def smoke(binary):
     with Session(binary) as terminal:
         terminal.until(b"MEMORY")
         assert b"\x1b[38;2;" in terminal.output, "truecolor palette was not emitted"
-        terminal.pump(0.8)  # Let the CPU baseline warm up.
+        for label in [b"SWAP", b"NETWORK", b"STORAGE", b"POWER", b"C01"]:
+            terminal.until(label)
         terminal.send(b"d")
         terminal.until(b"SELF CPU")
         terminal.send(b"d")

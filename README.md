@@ -6,7 +6,7 @@ A quiet, logo-centered terminal system monitor. Built in Rust for macOS first.
 The long-term goal: an OS logo that breathes, fills, shimmers, and reacts to
 what your system is doing.
 
-**Current checkpoint: Phase 1.** The logo is static. CPU and memory are live.
+**Current checkpoint: Phase 1.** The logo is static; the dashboard now includes live CPU, memory, network, storage, and power readings.
 
 ## Run
 
@@ -37,13 +37,17 @@ also work outside an interactive terminal.
 ## What works
 
 - Fastfetch's rainbow Apple ASCII logo, embedded as data with a per-character palette.
-- Total CPU usage and RAM usage, with 30 seconds of history at 500 ms intervals.
+- Total and per-core CPU, load averages, RAM, and swap.
+- Separate download/upload graphs and rates, with 30 seconds of 500 ms samples.
+- Root filesystem capacity and available space.
+- Battery percentage, charging state, and AC/battery source when available on macOS.
 - Uptime, OS, kernel, hostname, CPU model, logical core count, and architecture.
-- Side-by-side layout at standard sizes; stacked or compact layouts when space is limited.
+- A denser dashboard with CPU/memory, network, storage, and power panels at laptop sizes.
+- The full logo remains visible at 80×24; smaller terminals prioritize numeric readings.
 - Resize handling and restoration on quit, Ctrl-C, SIGINT, SIGTERM, SIGHUP, and panics.
 - Self CPU (percent of **one logical core**) and resident memory diagnostics.
 
-CPU displays “warming up” until two samples establish a valid counter delta.
+CPU displays “sampling” until two samples establish a valid counter delta.
 RAM is the operating system's used-memory value reported by sysinfo, not memory
 pressure. The self-CPU budget is **under 2% of one core**, with no multicore
 normalization that could hide overhead.
@@ -54,9 +58,10 @@ normalization that could hide overhead.
 src/
   app.rs        immutable dashboard state and key actions
   cli.rs        command-line validation
-  collectors/   persistent sysinfo collector on a blocking worker
+  collectors/   fast CPU/network collector and separate slow peripheral worker
   logo/         TOML assets → colored character cells
   model.rs      system snapshots, OS detection, bounded histories
+  telemetry.rs  optional network, storage, and power readings
   ui/           responsive layout, charts, diagnostics
 assets/logos/   embedded fastfetch art and RGB palettes
 tests/          core, collector integration, and real-PTY tests
@@ -67,6 +72,17 @@ The collector owns sysinfo's mutable counter cache and publishes new snapshots
 through `tokio::sync::watch`. A slow renderer sees the latest value without
 an unbounded queue. The UI never holds a channel lock across a draw or an await.
 Only the current process is refreshed for diagnostics, not the entire process list.
+
+CPU, per-core load, RAM/swap, and network counters refresh every 500 ms. Disk and
+battery refresh every 10 seconds on a separate worker, so a slow peripheral query
+does not stall the dashboard. Battery uses a bounded, read-only native `pmset`
+query; root capacity uses a root-only filesystem call. No sudo is required.
+
+Network rates use actual elapsed time and aggregate up, non-loopback interfaces.
+VPN/tunnel traffic can be counted twice in the aggregate. The interface summary
+prioritizes recent traffic; it is not an internet-connectivity test. Missing
+battery/storage data stays unavailable instead of becoming a fabricated zero.
+Core indices are logical cores, not an unverified P/E classification.
 
 Phase 1 draws on samples, keys that change the view, and resize events. Ratatui
 diffs frames and writes changed cells. A later 30 fps animation clock will be
@@ -104,11 +120,11 @@ and lasted 35 seconds.
 
 | Check | Result |
 | --- | --- |
-| Unit + integration + PTY tests | 14 passed |
-| Rust line coverage (including CLI and real terminal paths) | 97.0% |
-| Release CPU, diagnostics closed | 0.171% of one core |
-| Release CPU, diagnostics open | 0.143% of one core |
-| Resident memory, closed / open | 6.75 / 6.75 MiB |
+| Unit + integration + PTY tests | 34 passed |
+| Rust line coverage (including CLI and real terminal paths) | 98.1% |
+| Release CPU, diagnostics closed | 0.486% of one core |
+| Release CPU, diagnostics open | 0.543% of one core |
+| Resident memory, closed / open | 8.25 / 8.27 MiB |
 | Formatting and all-target Clippy | Passed, warnings denied |
 | RustSec dependency audit | No known vulnerabilities or warnings |
 
@@ -117,14 +133,14 @@ The animation phase must pass the same budget again.
 
 ## Next checkpoints
 
-1. **Current:** static logo, basic live stats, reliable macOS TUI.
+1. **Current:** static logo, rich live dashboard, reliable macOS TUI.
 2. Logo animation: pulse, liquid fill, temperature color, network shimmer.
 3. Events ticker, process/network views, expanded keybindings.
 4. Linux distro logos, TOML configuration, selectable themes.
 5. Apple Silicon GPU, power, and temperatures without sudo.
 6. Releases, package managers, CI packaging, and a demo GIF.
 
-Animation, P/E-core breakdowns, GPU/temperature readings, network statistics,
+Animation, P/E-core breakdowns, GPU/temperature readings,
 process management, event tracking, user configuration, and themes are not
 implemented at this checkpoint. Other platforms currently use a generic
 fastfetch fallback logo; Linux validation belongs to Phase 4.
