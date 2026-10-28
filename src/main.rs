@@ -1,17 +1,15 @@
-use std::io::{self, IsTerminal};
-
-use crossterm::event::EventStream;
-use futures_util::StreamExt;
+mod runtime;
 use osbeat::{
-    app::{Action, App},
-    cli::{HELP, Options},
-    collectors,
+    app::App,
+    cli::{HELP, Launch, Options},
+    config,
     logo::Logo,
     model::HostInfo,
-    ui,
 };
-use ratatui::DefaultTerminal;
-use tokio::signal::unix::{SignalKind, signal};
+use std::{
+    io::{self, IsTerminal},
+    path::Path,
+};
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> io::Result<()> {
@@ -24,73 +22,59 @@ async fn main() -> io::Result<()> {
             println!("osbeat {}", env!("CARGO_PKG_VERSION"));
             Ok(())
         }
-        Options::Run { diagnostics } => launch(diagnostics).await,
+        Options::InitConfig { path } => {
+            let path = path.map_or_else(config::default_path, Ok)?;
+            config::Config::init(&path)?;
+            println!("Created {}", path.display());
+            Ok(())
+        }
+        Options::Run(launch) => launch_app(launch).await,
     }
 }
 
-async fn launch(diagnostics: bool) -> io::Result<()> {
+async fn launch_app(launch: Launch) -> io::Result<()> {
+    let path = launch
+        .config
+        .clone()
+        .map_or_else(config::default_path, Ok)?;
+    let loaded = if launch.config.is_some() {
+        config::load_required(&path)?
+    } else {
+        config::load(&path)?
+    };
+    let settings = launch.apply(loaded)?;
     if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
         return Err(io::Error::new(
             io::ErrorKind::Unsupported,
             "osbeat needs an interactive terminal; run it directly in Terminal, Ghostty, or iTerm",
         ));
     }
-    let app = App::new(HostInfo::detect()).with_diagnostics(diagnostics);
-    let logo = Logo::for_os(app.host.os)?;
-    // Ratatui also installs a panic hook that restores the terminal before printing.
-    // Arm cleanup BEFORE initialization, which can fail after enabling raw mode.
+    let mut app = App::new(HostInfo::detect())
+        .with_config(settings)
+        .with_diagnostics(launch.diagnostics);
+    app.demo = launch.demo;
+    let logo = match &app.config.logo {
+        Some(custom) => {
+            let resolved = if custom.is_absolute() {
+                custom.clone()
+            } else {
+                path.parent().unwrap_or(Path::new(".")).join(custom)
+            };
+            Logo::load(&resolved)?
+        }
+        None => Logo::for_os(app.host.os)?,
+    };
+    // Arm cleanup before initialization, which can fail after raw mode is enabled.
     let _restore = TerminalRestore;
-    let mut terminal = ratatui::try_init()?;
-    run(&mut terminal, app, &logo).await
+    let mut terminal = runtime::init_terminal()?;
+    runtime::run(&mut terminal, app, &logo, &path).await
 }
 
 struct TerminalRestore;
-
 impl Drop for TerminalRestore {
-    // RAII: leaving this scope restores raw mode and the normal screen on errors too.
     fn drop(&mut self) {
         if let Err(error) = ratatui::try_restore() {
             eprintln!("osbeat: could not fully restore the terminal: {error}");
         }
     }
-}
-
-async fn run(terminal: &mut DefaultTerminal, mut app: App, logo: &Logo) -> io::Result<()> {
-    let mut terminate = signal(SignalKind::terminate())?;
-    let mut hangup = signal(SignalKind::hangup())?;
-    let mut interrupt = signal(SignalKind::interrupt())?;
-    let mut events = EventStream::new();
-    let (mut samples, worker) = collectors::start();
-    let result = async {
-        terminal.draw(|frame| ui::draw(frame, &app, logo))?;
-        loop {
-            tokio::select! {
-                _ = terminate.recv() => break,
-                _ = hangup.recv() => break,
-                _ = interrupt.recv() => break,
-                changed = samples.changed() => {
-                    changed.map_err(|_| io::Error::other("system collector stopped unexpectedly"))?;
-                    // Release the watch read lock before drawing or awaiting input.
-                    let snapshot = samples.borrow_and_update().clone();
-                    app = app.with_snapshot(snapshot);
-                }
-                event = events.next() => {
-                    let event = event.ok_or_else(|| io::Error::other("terminal input closed"))??;
-                    match Action::from_event(&event) {
-                        Action::Quit => break,
-                        Action::Diagnostics => app = app.with_diagnostics(!app.diagnostics),
-                        Action::Redraw => {},
-                        Action::None => continue,
-                    }
-                }
-            }
-            terminal.draw(|frame| ui::draw(frame, &app, logo))?;
-        }
-        Ok(())
-    }
-    .await;
-    // Closing the receiver tells the blocking worker to stop within one sample.
-    drop(samples);
-    worker.await.map_err(io::Error::other)?;
-    result
 }

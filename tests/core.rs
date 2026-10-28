@@ -127,6 +127,10 @@ fn render_snapshot(width: u16, height: u16, diagnostics: bool, snapshot: Snapsho
     };
     let app = App::new(host)
         .with_snapshot(snapshot)
+        .with_config(osbeat::config::Config {
+            layout: osbeat::config::LayoutMode::Dashboard,
+            ..Default::default()
+        })
         .with_diagnostics(diagnostics);
     let logo = Logo::for_os(Os::Mac).unwrap();
     let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
@@ -205,10 +209,13 @@ fn external_labels_cannot_inject_terminal_controls() {
 fn command_line_options_are_strict() {
     use osbeat::cli::Options;
     let parse = |args: &[&str]| Options::parse(args.iter().map(|arg| arg.to_string()));
-    assert_eq!(parse(&[]).unwrap(), Options::Run { diagnostics: false });
+    assert_eq!(parse(&[]).unwrap(), Options::Run(Default::default()));
     assert_eq!(
         parse(&["--debug"]).unwrap(),
-        Options::Run { diagnostics: true }
+        Options::Run(osbeat::cli::Launch {
+            diagnostics: true,
+            ..Default::default()
+        })
     );
     for flag in ["-h", "--help"] {
         assert_eq!(parse(&[flag]).unwrap(), Options::Help);

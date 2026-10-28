@@ -10,6 +10,8 @@ import select
 import signal
 import struct
 import subprocess
+import shutil
+import tempfile
 import termios
 import time
 
@@ -27,9 +29,10 @@ class Session:
 
         # The agent shell may set NO_COLOR=1. Test an actual color-capable terminal.
         environment = {key: value for key, value in os.environ.items() if key != "NO_COLOR"}
+        self.config_root = Path(tempfile.mkdtemp(prefix="terminal-check-", dir=binary.parent))
         self.process = subprocess.Popen(
             [str(binary), *args], stdin=self.slave, stdout=self.slave,
-            stderr=self.slave, env={**environment, "TERM": "xterm-256color", "COLORTERM": "truecolor"},
+            stderr=self.slave, env={**environment, "TERM": "xterm-256color", "COLORTERM": "truecolor", "XDG_CONFIG_HOME": str(self.config_root)},
             preexec_fn=attach_terminal,
         )
 
@@ -73,6 +76,7 @@ class Session:
             self.process.wait()
         os.close(self.master)
         os.close(self.slave)
+        shutil.rmtree(self.config_root)
 
     def __enter__(self):
         return self
@@ -92,6 +96,20 @@ def smoke(binary):
     with Session(binary) as terminal:
         terminal.until(b"MEMORY")
         assert b"\x1b[38;2;" in terminal.output, "truecolor palette was not emitted"
+        before_motion = len(terminal.output)
+        terminal.pump(0.35)
+        assert terminal.output[before_motion:].count(b"\x1b[38;2;") > 20, "logo is not animating"
+        terminal.send(b"c")
+        terminal.until(b"CUSTOMIZE")
+        terminal.send(b"\x1b[C")
+        terminal.pump(0.1)
+        terminal.send(b"s")
+        terminal.until(b"Saved")
+        saved = terminal.config_root / "osbeat/config.toml"
+        assert saved.exists() and "catppuccin" in saved.read_text()
+        terminal.send(b"\x1b")
+        terminal.pump(0.1)
+        terminal.send(b"\t")
         for label in [b"SWAP", b"NETWORK", b"STORAGE", b"POWER", b"C01"]:
             terminal.until(label)
         terminal.send(b"d")
@@ -122,9 +140,13 @@ def cpu_seconds(pid):
     return sum(float(part) * (60 ** index) for index, part in enumerate(reversed(parts)))
 
 
-def measure(binary, duration, diagnostics, capture=None):
-    with Session(binary, *(["--debug"] if diagnostics else [])) as terminal:
+def measure(binary, duration, diagnostics, capture=None, width=110, height=32, dashboard=False, customize=False):
+    with Session(binary, *(["--debug"] if diagnostics else []), *(["--dashboard"] if dashboard else [])) as terminal:
+        terminal.resize(width, height)
         terminal.until(b"MEMORY")
+        if customize:
+            terminal.send(b"c")
+            terminal.until(b"CUSTOMIZE")
         terminal.pump(3)
         baseline_cpu = cpu_seconds(terminal.process.pid)
         baseline_wall = time.monotonic()
@@ -135,7 +157,7 @@ def measure(binary, duration, diagnostics, capture=None):
         rss = subprocess.run(["ps", "-o", "rss=", "-p", str(terminal.process.pid)], capture_output=True, text=True, check=True)
         result = {"wall_seconds": round(elapsed, 2), "cpu_percent_one_core": round(usage, 3),
                   "rss_mib": round(int(rss.stdout.strip()) / 1024, 2), "diagnostics": diagnostics,
-                  "terminal": "110x32 truecolor PTY drained continuously", "sample_ms": 500}
+                  "terminal": f"{width}x{height} truecolor PTY drained continuously", "sample_ms": 500, "fps": 30, "view": "customize" if customize else "dashboard" if dashboard else "canvas"}
         if capture:
             Path(capture).write_bytes(terminal.output)
         terminal.send(b"q")
@@ -150,11 +172,15 @@ if __name__ == "__main__":
     parser.add_argument("--measure", type=float, help="Measure release CPU for this many seconds (>=30)")
     parser.add_argument("--debug", action="store_true")
     parser.add_argument("--capture", type=Path, help="Save ANSI output before quitting")
+    parser.add_argument("--width", type=int, default=110)
+    parser.add_argument("--height", type=int, default=32)
+    parser.add_argument("--dashboard", action="store_true")
+    parser.add_argument("--customize", action="store_true")
     options = parser.parse_args()
     binary = options.binary.resolve()
     if options.measure is not None:
         if options.measure < 30:
             parser.error("measure for at least 30 seconds")
-        measure(binary, options.measure, options.debug, options.capture)
+        measure(binary, options.measure, options.debug, options.capture, options.width, options.height, options.dashboard, options.customize)
     else:
         smoke(binary)

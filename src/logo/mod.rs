@@ -27,6 +27,17 @@ struct Asset {
 }
 
 impl Logo {
+    pub fn load(path: &std::path::Path) -> io::Result<Self> {
+        use std::io::Read;
+        let mut source = String::new();
+        std::fs::File::open(path)?
+            .take(256 * 1024 + 1)
+            .read_to_string(&mut source)?;
+        if source.len() > 256 * 1024 {
+            return Err(invalid("custom logo must be at most 256 KiB"));
+        }
+        Self::parse(&source).map_err(|error| invalid(format!("{}: {error}", path.display())))
+    }
     pub fn for_os(os: Os) -> io::Result<Self> {
         let data = match os {
             Os::Mac => include_str!("../../assets/logos/macos.toml"),
@@ -52,11 +63,15 @@ impl Logo {
             .map(|line| parse_row(line, &palette, &mut color))
             .collect::<io::Result<Vec<_>>>()?;
         let width = rows.iter().map(Vec::len).max().unwrap_or(0);
-        if width == 0 {
+        if width == 0
+            || width > 512
+            || rows.len() > 256
+            || !rows.iter().flatten().any(|g| g.character != ' ')
+        {
             return Err(invalid("logo is empty"));
         }
         Ok(Self {
-            name: asset.name,
+            name: crate::model::clean(&asset.name),
             rows,
             width,
         })

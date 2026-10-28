@@ -1,6 +1,7 @@
+use super::gib;
 use super::widgets::{panel, spark, text};
-use super::{CPU, CYAN, FG, MUTED, PINK, RAM, gib, rate, uptime};
 use crate::app::App;
+use crate::config::Palette;
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
@@ -20,26 +21,59 @@ pub(super) fn at(area: Rect, offset: u16, height: u16) -> Rect {
 
 pub(super) fn stats(frame: &mut Frame, app: &App, area: Rect) {
     if area.width < 52 || area.height < 19 {
-        compact(frame, app, area);
+        super::details::compact(frame, app, area);
         return;
     }
-    let top = (area.height / 3).clamp(8, 10);
-    let rows = Layout::vertical([
-        Constraint::Length(top),
-        Constraint::Min(5),
-        Constraint::Length(6),
-    ])
-    .split(area);
-    let columns =
-        Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).split(rows[0]);
-    cpu(frame, app, columns[0]);
-    memory(frame, app, columns[1]);
-    super::details::network(frame, app, rows[1]);
-    super::details::peripherals(frame, app, rows[2]);
+    let enabled = app.config.panels;
+    let groups = [
+        enabled.cpu || enabled.memory,
+        enabled.network,
+        enabled.storage || enabled.power,
+    ];
+    let count = groups.into_iter().filter(|enabled| *enabled).count();
+    if count == 0 {
+        text(
+            frame,
+            area,
+            "Panels hidden · c customize",
+            app.config.theme.palette().muted,
+        );
+        return;
+    }
+    let constraints: Vec<_> = groups
+        .into_iter()
+        .filter(|enabled| *enabled)
+        .map(|_| Constraint::Ratio(1, count as u32))
+        .collect();
+    let rows = Layout::vertical(constraints).split(area);
+    let mut index = 0;
+    if groups[0] {
+        let panel_count = u32::from(enabled.cpu) + u32::from(enabled.memory);
+        let columns = Layout::horizontal(vec![
+            Constraint::Ratio(1, panel_count);
+            panel_count as usize
+        ])
+        .split(rows[index]);
+        if enabled.cpu {
+            cpu(frame, app, columns[0]);
+        }
+        if enabled.memory {
+            memory(frame, app, columns[usize::from(enabled.cpu)]);
+        }
+        index += 1;
+    }
+    if enabled.network {
+        super::details::network(frame, app, rows[index]);
+        index += 1;
+    }
+    if groups[2] {
+        super::details::peripherals(frame, app, rows[index]);
+    }
 }
 
 fn cpu(frame: &mut Frame, app: &App, area: Rect) {
-    let inner = panel(frame, area, "CPU", CPU);
+    let palette = app.config.theme.palette();
+    let inner = panel(frame, area, "CPU", palette.cpu, palette);
     let value = app
         .snapshot
         .cpu
@@ -48,26 +82,27 @@ fn cpu(frame: &mut Frame, app: &App, area: Rect) {
         frame,
         at(inner, 0, 1),
         format!("{value}  ·  {} CORES", app.host.cores),
-        FG,
+        palette.fg,
     );
-    spark(frame, at(inner, 1, 2), &app.history.cpu, 100, CPU);
+    spark(frame, at(inner, 1, 2), &app.history.cpu, 100, palette.cpu);
     let load = app.snapshot.telemetry.load_average;
     text(
         frame,
         at(inner, 3, 1),
         format!("LOAD {:.1}  {:.1}  {:.1}", load[0], load[1], load[2]),
-        MUTED,
+        palette.muted,
     );
     cores(
         frame,
         at(inner, 4, inner.height.saturating_sub(4)),
         &app.snapshot.telemetry.per_core,
+        palette,
     );
 }
 
-fn cores(frame: &mut Frame, area: Rect, cores: &[f32]) {
+pub(super) fn cores(frame: &mut Frame, area: Rect, cores: &[f32], palette: Palette) {
     if cores.is_empty() {
-        text(frame, area, "Core counters warming up", MUTED);
+        text(frame, area, "Core counters warming up", palette.muted);
         return;
     }
     let columns = (area.width / 5).max(1) as usize;
@@ -86,7 +121,11 @@ fn cores(frame: &mut Frame, area: Rect, cores: &[f32]) {
                     let id = row * columns + index + 1;
                     Span::styled(
                         format!("C{id:02}{bar} "),
-                        Style::default().fg(if *value >= 80.0 { super::AMBER } else { CPU }),
+                        Style::default().fg(if *value >= 80.0 {
+                            palette.amber
+                        } else {
+                            palette.cpu
+                        }),
                     )
                 })
                 .collect();
@@ -102,21 +141,22 @@ fn cores(frame: &mut Frame, area: Rect, cores: &[f32]) {
                 "+{:02}  ",
                 cores.len().saturating_sub(capacity).saturating_add(1)
             ),
-            MUTED,
+            palette.muted,
         );
     }
 }
 
 fn memory(frame: &mut Frame, app: &App, area: Rect) {
-    let inner = panel(frame, area, "MEMORY", RAM);
+    let palette = app.config.theme.palette();
+    let inner = panel(frame, area, "MEMORY", palette.ram, palette);
     let s = &app.snapshot;
     text(
         frame,
         at(inner, 0, 1),
         format!("{} / {} GiB", gib(s.used_memory), gib(s.total_memory)),
-        FG,
+        palette.fg,
     );
-    spark(frame, at(inner, 1, 2), &app.history.ram, 100, RAM);
+    spark(frame, at(inner, 1, 2), &app.history.ram, 100, palette.ram);
     text(
         frame,
         at(inner, 3, 1),
@@ -125,7 +165,7 @@ fn memory(frame: &mut Frame, app: &App, area: Rect) {
             s.memory_percent(),
             gib(s.total_memory.saturating_sub(s.used_memory))
         ),
-        MUTED,
+        palette.muted,
     );
     text(
         frame,
@@ -135,82 +175,130 @@ fn memory(frame: &mut Frame, app: &App, area: Rect) {
             gib(s.telemetry.swap_used),
             gib(s.telemetry.swap_total)
         ),
-        PINK,
+        palette.pink,
     );
-    super::widgets::gauge(frame, at(inner, 5, 1), s.used_memory, s.total_memory, RAM);
+    super::widgets::gauge(
+        frame,
+        at(inner, 5, 1),
+        s.used_memory,
+        s.total_memory,
+        palette.ram,
+        palette.line,
+    );
 }
 
-fn compact(frame: &mut Frame, app: &App, area: Rect) {
-    let s = &app.snapshot;
-    if area.height < 12 {
-        let lines = vec![
-            Line::from(format!(
-                "CPU     {}",
-                s.cpu
-                    .map_or_else(|| "sampling".into(), |cpu| format!("{cpu:.1}%"))
-            )),
-            Line::from(format!(
-                "MEMORY  {} / {} GiB",
-                gib(s.used_memory),
-                gib(s.total_memory)
-            )),
-            Line::from(format!(
-                "NET ↓{} ↑{}",
-                rate(s.telemetry.network_down),
-                rate(s.telemetry.network_up)
-            )),
-            Line::from(format!("SWAP    {} GiB", gib(s.telemetry.swap_used))),
-            Line::from(format!("UPTIME  {}", uptime(s.uptime))),
-            Line::from(app.host.os_name.as_str()),
-        ];
-        frame.render_widget(Paragraph::new(lines).style(Style::default().fg(FG)), area);
-        return;
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        config::{Config, Panels, ThemeName},
+        model::{HostInfo, Os},
+    };
+    use ratatui::{Terminal, backend::TestBackend};
+
+    fn app(panels: Panels, theme: ThemeName) -> App {
+        App {
+            config: Config {
+                panels,
+                theme,
+                ..Config::default()
+            },
+            ..App::new(HostInfo {
+                os: Os::Mac,
+                os_name: "macOS".into(),
+                kernel: "Darwin".into(),
+                hostname: "test".into(),
+                cpu_name: "Apple".into(),
+                cores: 8,
+                arch: "arm64".into(),
+            })
+        }
     }
-    let cpu = s
-        .cpu
-        .map_or_else(|| "sampling".into(), |cpu| format!("{cpu:.1}%"));
-    text(
-        frame,
-        at(area, 0, 1),
-        format!("CPU  {cpu} · {} CORES", app.host.cores),
-        CPU,
-    );
-    spark(frame, at(area, 1, 2), &app.history.cpu, 100, CPU);
-    cores(frame, at(area, 3, 1), &s.telemetry.per_core);
-    text(
-        frame,
-        at(area, 4, 1),
-        format!(
-            "MEMORY {} / {} GiB",
-            gib(s.used_memory),
-            gib(s.total_memory)
-        ),
-        RAM,
-    );
-    spark(frame, at(area, 5, 2), &app.history.ram, 100, RAM);
-    text(
-        frame,
-        at(area, 7, 1),
-        format!(
-            "SWAP {} / {} GiB",
-            gib(s.telemetry.swap_used),
-            gib(s.telemetry.swap_total)
-        ),
-        PINK,
-    );
-    text(
-        frame,
-        at(area, 8, 1),
-        format!("NETWORK ↓{}", rate(s.telemetry.network_down)),
-        CYAN,
-    );
-    let maximum = app.history.down.iter().max().copied().unwrap_or(1).max(1);
-    spark(frame, at(area, 9, 2), &app.history.down, maximum, CYAN);
-    text(
-        frame,
-        at(area, 11, 1),
-        format!("UPLOAD  ↑{}", rate(s.telemetry.network_up)),
-        PINK,
-    );
-    super::details::compact_peripherals(frame, app, at(area, 12, area.height.saturating_sub(12)));
+
+    fn render(app: &App, width: u16, height: u16) -> ratatui::buffer::Buffer {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal
+            .draw(|frame| stats(frame, app, frame.area()))
+            .unwrap();
+        terminal.backend().buffer().clone()
+    }
+
+    fn contents(buffer: &ratatui::buffer::Buffer) -> String {
+        buffer.content.iter().map(|cell| cell.symbol()).collect()
+    }
+
+    #[test]
+    fn hidden_panels_disappear_and_single_panel_fills_available_area() {
+        let disabled = Panels {
+            cpu: false,
+            memory: false,
+            network: false,
+            storage: false,
+            power: false,
+        };
+        for (width, height) in [(80, 24), (45, 18), (30, 8)] {
+            let empty = render(&app(disabled, ThemeName::Default), width, height);
+            assert!(contents(&empty).contains("Panels hidden"));
+            let cpu_only = render(
+                &app(
+                    Panels {
+                        cpu: true,
+                        ..disabled
+                    },
+                    ThemeName::Default,
+                ),
+                width,
+                height,
+            );
+            let source = contents(&cpu_only);
+            assert!(source.contains("CPU"));
+            assert!(
+                !source.contains("MEMORY")
+                    && !source.contains("NETWORK")
+                    && !source.contains("STORAGE")
+                    && !source.contains("POWER")
+            );
+            if width >= 52 {
+                assert_eq!(cpu_only[(width - 1, height - 1)].symbol(), "╯");
+            }
+        }
+    }
+
+    #[test]
+    fn dashboard_surface_and_border_follow_selected_theme() {
+        let palette = ThemeName::Gruvbox.palette();
+        let buffer = render(&app(Panels::default(), ThemeName::Gruvbox), 80, 24);
+        assert_eq!(buffer[(0, 0)].fg, palette.line);
+        assert_eq!(buffer[(0, 0)].bg, palette.panel);
+        assert!(buffer.content.iter().any(|cell| cell.fg == palette.cpu));
+        assert!(buffer.content.iter().any(|cell| cell.fg == palette.ram));
+    }
+
+    #[test]
+    fn every_panel_combination_survives_resize_without_hidden_labels() {
+        for mask in 0..32 {
+            let enabled = Panels {
+                cpu: mask & 1 != 0,
+                memory: mask & 2 != 0,
+                network: mask & 4 != 0,
+                storage: mask & 8 != 0,
+                power: mask & 16 != 0,
+            };
+            for (width, height) in [(80, 24), (45, 18), (30, 8), (1, 1)] {
+                let buffer = render(&app(enabled, ThemeName::Phosphor), width, height);
+                let source = contents(&buffer);
+                for (shown, label) in [
+                    (enabled.cpu, "CPU"),
+                    (enabled.memory, "MEMORY"),
+                    (enabled.network, "NET"),
+                    (enabled.storage, "STORAGE"),
+                    (enabled.power, "POWER"),
+                ] {
+                    if !shown {
+                        assert!(!source.contains(label), "{label} visible for mask {mask}");
+                    }
+                }
+            }
+        }
+    }
 }

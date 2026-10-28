@@ -1,5 +1,5 @@
-use super::{BG, FG, LINE, MUTED, PANEL, RAM};
 use crate::app::App;
+use crate::config::Palette;
 use ratatui::{
     Frame,
     layout::Rect,
@@ -8,15 +8,21 @@ use ratatui::{
     widgets::{Block, BorderType, Borders, Clear, LineGauge, Paragraph, Sparkline},
 };
 
-pub(super) fn panel(frame: &mut Frame, area: Rect, title: &str, color: Color) -> Rect {
+pub(super) fn panel(
+    frame: &mut Frame,
+    area: Rect,
+    title: &str,
+    color: Color,
+    palette: Palette,
+) -> Rect {
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
         .title(Line::from(Span::styled(
             format!(" {title} "),
             Style::default().fg(color).add_modifier(Modifier::BOLD),
         )))
-        .border_style(Style::default().fg(LINE))
-        .style(Style::default().bg(PANEL));
+        .border_style(Style::default().fg(palette.line))
+        .style(Style::default().bg(palette.panel));
     let inner = block.inner(area);
     frame.render_widget(block, area);
     inner
@@ -48,7 +54,14 @@ pub(super) fn spark(frame: &mut Frame, area: Rect, history: &[u64], maximum: u64
     );
 }
 
-pub(super) fn gauge(frame: &mut Frame, area: Rect, used: u64, total: u64, color: Color) {
+pub(super) fn gauge(
+    frame: &mut Frame,
+    area: Rect,
+    used: u64,
+    total: u64,
+    color: Color,
+    line: Color,
+) {
     let ratio = if total == 0 {
         0.0
     } else {
@@ -61,26 +74,27 @@ pub(super) fn gauge(frame: &mut Frame, area: Rect, used: u64, total: u64, color:
             .filled_symbol("━")
             .unfilled_symbol("━")
             .filled_style(Style::default().fg(color))
-            .unfilled_style(Style::default().fg(LINE)),
+            .unfilled_style(Style::default().fg(line)),
         area,
     );
 }
 
 pub(super) fn diagnostics(frame: &mut Frame, app: &App, area: Rect) {
+    let palette = app.config.theme.palette();
     let cpu = app
         .snapshot
         .own_cpu
         .map_or_else(|| "sampling".into(), |cpu| format!("{cpu:.2}%"));
     let color = if app.snapshot.own_cpu.is_some_and(|cpu| cpu >= 2.0) {
-        super::AMBER
+        palette.amber
     } else {
-        RAM
+        palette.ram
     };
     frame.render_widget(Clear, area);
     let block = Block::default()
         .borders(Borders::TOP)
-        .border_style(Style::default().fg(LINE))
-        .style(Style::default().bg(BG));
+        .border_style(Style::default().fg(palette.line))
+        .style(Style::default().bg(palette.bg));
     let inner = block.inner(area);
     frame.render_widget(block, area);
     frame.render_widget(
@@ -94,10 +108,10 @@ pub(super) fn diagnostics(frame: &mut Frame, app: &App, area: Rect) {
             ]),
             Line::from(Span::styled(
                 "Budget <2% of one core · d to close",
-                Style::default().fg(MUTED),
+                Style::default().fg(palette.muted),
             )),
         ])
-        .style(Style::default().fg(FG)),
+        .style(Style::default().fg(palette.fg)),
         inner,
     );
 }
