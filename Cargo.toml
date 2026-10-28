@@ -1,0 +1,22 @@
+[package]
+name = "osbeat"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.95"
+description = "Your system, with a heartbeat. A logo-centered terminal monitor."
+license = "MIT"
+keywords = ["terminal", "monitor", "tui", "macos", "system"]
+categories = ["command-line-utilities"]
+
+[dependencies]
+crossterm = { version = "0.29", features = ["event-stream"] }
+futures-util = { version = "0.3", default-features = false, features = ["std", "async-await"] }
+ratatui = { version = "0.30", default-features = false, features = ["crossterm", "layout-cache"] }
+serde = { version = "1", features = ["derive"] }
+sysinfo = { version = "0.39", default-features = false, features = ["system"] }
+tokio = { version = "1", features = ["rt", "macros", "sync", "signal", "time"] }
+toml = "0.9"
+
+[profile.release]
+lto = "thin"
+strip = true
