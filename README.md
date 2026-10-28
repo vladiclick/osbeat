@@ -106,6 +106,12 @@ memory boundary. Spectrum sweeps a moving rainbow. Original preserves the
 fastfetch palette while breathing. Themes style the surrounding interface;
 effects control the logo's colors independently.
 
+Apple's solid silhouette uses a 128×128 coverage mask sampled from the
+Simple Icons vector. Antialiased half-block cells preserve the leaf, bite and
+curves; dot mode samples all eight braille dots separately. The original
+fastfetch art remains available in ASCII mode. Geometry is cached between
+measurement updates, and animations change its colors without deforming it.
+
 The engine applies color math to a character mask; it has no Apple-specific
 coordinates. To use another logo, point `logo` in your config to a TOML asset:
 
@@ -115,8 +121,13 @@ logo = "/absolute/path/to/logo.toml"
 
 Use the same `name`, `colors`, and `art` structure as
 [the bundled logo](assets/logos/macos.toml). Relative paths resolve beside the
-config. Custom files are bounded and validated. Glyphs can be ASCII, solid, or
-dot-matrix without redrawing the silhouette.
+config. Custom files are bounded and validated. An optional `mask` field adds
+a rectangular grid of hexadecimal coverage (`0` transparent through `f` opaque),
+at most 512×256 pixels. Its pixels are square; the renderer corrects terminal
+cell proportions. Solid and dot modes use it; ASCII uses `art`. Assets without
+a mask retain the character-based renderer. To regenerate the bundled mask,
+run `scripts/build_logo_mask.py` with Pillow and resvg 0.45.1 installed; these
+tools are never runtime dependencies.
 
 Temperature is **not** inferred from CPU load. Thermal sensors, GPU telemetry,
 event glitches, and disk-I/O particles still need real collectors. None are
@@ -169,13 +180,12 @@ a 3-second warm-up and 35 seconds of process CPU-time measurement.
 
 | Mode | CPU, one core | Resident memory |
 | --- | --- | --- |
-| Canvas,110×32 | 1.143% | 8.95 MiB |
-| Canvas+diagnostics,110×32 | 0.943% | 8.88 MiB |
-| Dashboard,110×32 | 1.114% | 8.77 MiB |
-| Customization,110×32 | 1.086% | 8.95 MiB |
-| Canvas,160×48 | 1.343% | 10.52 MiB |
+| Canvas,110×32 | 0.971% | 8.94 MiB |
+| Canvas,120×36 | 1.086% | 9.67 MiB |
+| Dashboard,110×32 | 0.971% | 9.03 MiB |
+| Canvas+diagnostics,160×48 | 1.257% | 11.88 MiB |
 
-**70 tests pass; line coverage is 96.5%.** Formatting, warnings-denied Clippy,
+**82 tests pass; line coverage is 97.0%.** Formatting, warnings-denied Clippy,
 and the RustSec dependency audit pass with no known vulnerabilities.
 These local results do not guarantee the same cost on every system or custom
 configuration; test increased frame rates and large custom assets on your host.
@@ -218,5 +228,8 @@ MIT. The logo art comes from [fastfetch](https://github.com/fastfetch-cli/fastfe
 also MIT licensed, pinned to revision
 `2f68ce7f7467ddbaaf31519c1d41455781d48492`. The original art is preserved as data;
 osbeat transforms its presentation at runtime. The six-slot palette has muted
-RGB values here. Full upstream copyright and license notices are in
+RGB values here. The detailed Apple silhouette is from
+[Simple Icons](https://github.com/simple-icons/simple-icons/blob/90646e4bf7f3b89df6c37e65baf3e7bc759a517c/icons/apple.svg),
+under CC0 1.0 Universal, pinned to `90646e4bf7f3b89df6c37e65baf3e7bc759a517c`.
+Full upstream copyright and license notices are in
 [THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES). Fastfetch is not invoked at runtime.
