@@ -5,6 +5,8 @@ edition = "2024"
 rust-version = "1.95"
 description = "Your system, with a heartbeat. A logo-centered terminal monitor for macOS."
 license = "MIT"
+repository = "https://github.com/vladiclick/osbeat"
+readme = "README.md"
 keywords = ["terminal", "monitor", "tui", "macos", "system"]
 categories = ["command-line-utilities"]
 
